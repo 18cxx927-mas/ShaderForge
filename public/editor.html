@@ -1,0 +1,440 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>Minecraft Iris GLSL Code Studio</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { background: #0a0a0c; color: #fff; font-family: system-ui, -apple-system, sans-serif; height: 100vh; display: flex; flex-direction: column; overflow: hidden; }
+    header { height: 48px; background: #16181d; border-bottom: 1px solid #272a34; display: flex; justify-content: space-between; align-items: center; padding: 0 16px; font-size: 13px; shrink: 0; }
+    .brand { font-weight: bold; color: #38bdf8; display: flex; align-items: center; gap: 8px; }
+    .badge { font-size: 11px; background: #272a34; padding: 3px 8px; border-radius: 6px; color: #9ca3af; border: 1px solid #374151; }
+    #container { flex: 1; display: flex; overflow: hidden; }
+    #editor-pane { width: 55%; height: 100%; display: flex; flex-direction: column; border-right: 1px solid #272a34; }
+    #preview-pane { width: 45%; height: 100%; position: relative; background: #000; display: flex; flex-direction: column; }
+    @media (max-width: 900px) {
+      #container { flex-direction: column; }
+      #editor-pane { width: 100%; height: 60%; border-right: none; border-bottom: 1px solid #272a34; }
+      #preview-pane { width: 100%; height: 40%; }
+    }
+    .editor-bar { padding: 8px 16px; background: #111318; border-bottom: 1px solid #272a34; font-size: 12px; color: #9ca3af; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px; }
+    textarea { flex: 1; width: 100%; background: #080a0f; color: #34d399; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 12px; line-height: 1.6; border: none; padding: 16px; resize: none; outline: none; }
+    canvas { width: 100%; height: 100%; display: block; }
+    .tip { position: absolute; bottom: 12px; left: 12px; background: rgba(0,0,0,0.7); padding: 5px 12px; border-radius: 6px; font-size: 11px; color: #9ca3af; border: 1px solid #272a34; pointer-events: none; }
+    .btn { background: #38bdf8; color: #000; border: none; padding: 5px 12px; border-radius: 6px; font-weight: 600; font-size: 12px; cursor: pointer; transition: 0.15s; }
+    .btn:hover { background: #0ea5e9; }
+    .btn-secondary { background: #272a34; color: #fff; }
+    .btn-secondary:hover { background: #374151; }
+    #status-badge { position: absolute; top: 12px; left: 12px; background: #064e3b; color: #34d399; padding: 6px 12px; border-radius: 6px; font-size: 11px; border: 1px solid #059669; z-index: 25; font-family: monospace; max-width: 90%; }
+    .preview-bar { height: 36px; background: #111318; border-bottom: 1px solid #272a34; display: flex; align-items: center; justify-content: space-between; padding: 0 12px; font-size: 12px; }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="brand">
+      <span>⚡</span>
+      <span>Iris GLSL Code Studio</span>
+      <span class="badge">Minecraft 1.21+ Iris</span>
+    </div>
+    <div style="display: flex; gap: 8px;">
+      <button class="btn btn-secondary" onclick="formatCode()">Format GLSL</button>
+      <button class="btn" onclick="copyCode()">Copy Code</button>
+      <a href="/" class="btn btn-secondary" style="text-decoration:none; display:inline-flex; align-items:center;">Full Studio</a>
+    </div>
+  </header>
+  <div id="container">
+    <div id="editor-pane">
+      <div class="editor-bar">
+        <span>shaders/gbuffers_terrain.fsh (Real-time compiling on keystroke)</span>
+        <span class="badge">OpenGL 330 / Iris Compatibility</span>
+      </div>
+      <textarea id="code-editor" spellcheck="false">#version 330 compatibility
+
+uniform mat4 gbufferModelView;
+uniform mat4 gbufferProjection;
+uniform float frameTimeCounter;
+uniform int worldTime;
+uniform vec3 sunPosition;
+
+uniform sampler2D colortex0;
+
+varying vec2 texcoord;
+varying vec4 glColor;
+varying vec3 normal;
+varying vec3 worldPosition;
+
+void main() {
+    vec4 baseColor = texture2D(colortex0, texcoord) * glColor;
+    
+    // Sunlight calculation
+    vec3 lightDir = normalize(sunPosition);
+    float diff = max(dot(normalize(normal), lightDir), 0.2);
+    vec3 sunlight = vec3(1.0, 0.92, 0.75) * diff;
+    
+    // Subtle distance fog
+    float dist = length(worldPosition);
+    float fog = clamp(exp(-dist * 0.035), 0.0, 1.0);
+    vec3 fogColor = vec3(0.65, 0.78, 0.95);
+    
+    vec3 finalRgb = mix(fogColor, baseColor.rgb * (sunlight + 0.35), fog);
+    gl_FragColor = vec4(finalRgb, baseColor.a);
+}
+</textarea>
+    </div>
+    <div id="preview-pane">
+      <div class="preview-bar">
+        <span>Live WebGL 3D Preview</span>
+        <button class="badge" style="cursor:pointer;" onclick="toggleTime()">Toggle Day / Night</button>
+      </div>
+      <div style="flex: 1; position: relative;">
+        <canvas id="previewCanvas"></canvas>
+        <div id="status-badge">Compiling Iris Shader...</div>
+        <div class="tip">Drag to orbit camera · Scroll to zoom</div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    function initMinecraft3DEngine(canvasId, errorBadgeId) {
+      var canvas = document.getElementById(canvasId);
+      var errEl = errorBadgeId ? document.getElementById(errorBadgeId) : null;
+      if (!canvas) return null;
+
+      var gl = canvas.getContext('webgl', { antialias: true, alpha: false }) || canvas.getContext('experimental-webgl');
+      if (!gl) {
+        if (errEl) {
+          errEl.style.display = 'block';
+          errEl.style.background = '#7f1d1d';
+          errEl.innerHTML = 'WebGL is not supported in this browser';
+        }
+        return null;
+      }
+
+      gl.enable(gl.DEPTH_TEST);
+      gl.depthFunc(gl.LEQUAL);
+
+      var camera = { yaw: 0.75, pitch: 0.45, dist: 14, isDragging: false, lastX: 0, lastY: 0 };
+      var worldTime = 6000;
+      var startTime = performance.now();
+      var activeProgram = null;
+
+      function handleDragStart(x, y) { camera.isDragging = true; camera.lastX = x; camera.lastY = y; }
+      function handleDragMove(x, y) {
+        if (!camera.isDragging) return;
+        camera.yaw += (x - camera.lastX) * 0.008;
+        camera.pitch = Math.max(-1.4, Math.min(1.4, camera.pitch + (y - camera.lastY) * 0.008));
+        camera.lastX = x; camera.lastY = y;
+      }
+      function handleDragEnd() { camera.isDragging = false; }
+
+      canvas.addEventListener('mousedown', function(e) { handleDragStart(e.clientX, e.clientY); });
+      window.addEventListener('mousemove', function(e) { handleDragMove(e.clientX, e.clientY); });
+      window.addEventListener('mouseup', handleDragEnd);
+
+      canvas.addEventListener('touchstart', function(e) { if (e.touches.length === 1) handleDragStart(e.touches[0].clientX, e.touches[0].clientY); }, { passive: true });
+      window.addEventListener('touchmove', function(e) { if (e.touches.length === 1) handleDragMove(e.touches[0].clientX, e.touches[0].clientY); }, { passive: true });
+      window.addEventListener('touchend', handleDragEnd);
+
+      canvas.addEventListener('wheel', function(e) {
+        e.preventDefault();
+        camera.dist = Math.max(5, Math.min(30, camera.dist + e.deltaY * 0.02));
+      }, { passive: false });
+
+      var pos = [], uvs = [], norms = [], cols = [];
+      function addCube(x, y, z, topC, sideC, botC) {
+        var s = 0.5;
+        var faces = [
+          { n: [0, 1, 0], v: [[x-s,y+s,z+s],[x+s,y+s,z+s],[x+s,y+s,z-s],[x-s,y+s,z-s]], c: topC },
+          { n: [0,-1, 0], v: [[x-s,y-s,z-s],[x+s,y-s,z-s],[x+s,y-s,z+s],[x-s,y-s,z+s]], c: botC },
+          { n: [0, 0, 1], v: [[x-s,y-s,z+s],[x+s,y-s,z+s],[x+s,y+s,z+s],[x-s,y+s,z+s]], c: sideC },
+          { n: [0, 0,-1], v: [[x+s,y-s,z-s],[x-s,y-s,z-s],[x-s,y+s,z-s],[x+s,y+s,z-s]], c: sideC },
+          { n: [1, 0, 0], v: [[x+s,y-s,z+s],[x+s,y-s,z-s],[x+s,y+s,z-s],[x+s,y+s,z+s]], c: sideC },
+          { n: [-1,0, 0], v: [[x-s,y-s,z-s],[x-s,y-s,z+s],[x-s,y+s,z+s],[x-s,y+s,z-s]], c: sideC }
+        ];
+        for (var f = 0; f < faces.length; f++) {
+          var fc = faces[f];
+          var idxs = [0, 1, 2, 0, 2, 3];
+          var quvs = [[0,0],[1,0],[1,1],[0,1]];
+          for (var i = 0; i < idxs.length; i++) {
+            var k = idxs[i];
+            pos.push(fc.v[k][0], fc.v[k][1], fc.v[k][2]);
+            norms.push(fc.n[0], fc.n[1], fc.n[2]);
+            uvs.push(quvs[k][0], quvs[k][1]);
+            cols.push(fc.c[0], fc.c[1], fc.c[2], fc.c[3]);
+          }
+        }
+      }
+
+      var cGrass = [0.36, 0.65, 0.22, 1.0], cGrassSide = [0.48, 0.35, 0.22, 1.0];
+      var cDirt = [0.52, 0.38, 0.24, 1.0], cStone = [0.50, 0.50, 0.52, 1.0];
+      var cWood = [0.42, 0.30, 0.18, 1.0], cLeaves = [0.28, 0.58, 0.18, 0.95];
+      var cWater = [0.18, 0.52, 0.88, 0.75], cRed = [0.88, 0.18, 0.18, 1.0];
+
+      for (var x = -3; x <= 3; x++) {
+        for (var z = -3; z <= 3; z++) {
+          if (x >= 1 && z >= 1) {
+            addCube(x, -1, z, cDirt, cDirt, cDirt);
+            addCube(x, 0, z, cWater, cWater, cWater);
+          } else {
+            addCube(x, -2, z, cStone, cStone, cStone);
+            addCube(x, -1, z, cDirt, cDirt, cDirt);
+            addCube(x, 0, z, cGrass, cGrassSide, cDirt);
+          }
+        }
+      }
+      addCube(-1, 1, -1, cWood, cWood, cWood);
+      addCube(-1, 2, -1, cWood, cWood, cWood);
+      addCube(-1, 3, -1, cWood, cWood, cWood);
+      for (var lx = -1; lx <= 1; lx++) {
+        for (var lz = -1; lz <= 1; lz++) {
+          for (var ly = 3; ly <= 4; ly++) {
+            if (lx === 0 && lz === 0 && ly === 3) continue;
+            addCube(-1 + lx, ly, -1 + lz, cLeaves, cLeaves, cLeaves);
+          }
+        }
+      }
+      addCube(-1, 5, -1, cLeaves, cLeaves, cLeaves);
+      addCube(-2, 1, 1, cRed, cRed, cRed);
+
+      var posBuf = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, posBuf); gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(pos), gl.STATIC_DRAW);
+      var uvBuf = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, uvBuf); gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(uvs), gl.STATIC_DRAW);
+      var normBuf = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, normBuf); gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(norms), gl.STATIC_DRAW);
+      var colBuf = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, colBuf); gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(cols), gl.STATIC_DRAW);
+      var vertexCount = pos.length / 3;
+
+      var tex = gl.createTexture();
+      var pData = new Uint8Array(32 * 32 * 4);
+      for (var pi = 0; pi < 32 * 32; pi++) {
+        var grain = 240 + Math.floor(Math.random() * 15);
+        pData[pi * 4] = grain; pData[pi * 4 + 1] = grain; pData[pi * 4 + 2] = grain; pData[pi * 4 + 3] = 255;
+      }
+      gl.bindTexture(gl.TEXTURE_2D, tex);
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 32, 32, 0, gl.RGBA, gl.UNSIGNED_BYTE, pData);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+
+      var vShaderSource = "attribute vec3 position; attribute vec2 uv; attribute vec3 norm; attribute vec4 color; uniform mat4 gbufferModelView; uniform mat4 gbufferProjection; varying vec2 texcoord; varying vec4 glColor; varying vec3 normal; varying vec3 vNormal; varying vec3 worldPosition; void main() { texcoord = uv; glColor = color; normal = norm; vNormal = norm; worldPosition = position; gl_Position = gbufferProjection * gbufferModelView * vec4(position, 1.0); }";
+
+      function compileShader(customGlsl) {
+        var cleanGlsl = customGlsl.replace(/#version\\s+\\d+(\\s+compatibility)?/g, '');
+        if (!cleanGlsl.includes('precision highp float;') && !cleanGlsl.includes('precision mediump float;')) {
+          cleanGlsl = 'precision mediump float;\\n' + cleanGlsl;
+        }
+
+        var missing = '';
+        function checkDecl(token, decl) { if (cleanGlsl.indexOf(token) === -1) missing += decl + '\\n'; }
+        checkDecl('gbufferModelView', 'uniform mat4 gbufferModelView;');
+        checkDecl('gbufferProjection', 'uniform mat4 gbufferProjection;');
+        checkDecl('gbufferModelViewInverse', 'uniform mat4 gbufferModelViewInverse;');
+        checkDecl('gbufferProjectionInverse', 'uniform mat4 gbufferProjectionInverse;');
+        checkDecl('cameraPosition', 'uniform vec3 cameraPosition;');
+        checkDecl('worldTime', 'uniform int worldTime;');
+        checkDecl('frameTimeCounter', 'uniform float frameTimeCounter;');
+        checkDecl('rainStrength', 'uniform float rainStrength;');
+        checkDecl('sunPosition', 'uniform vec3 sunPosition;');
+        checkDecl('upPosition', 'uniform vec3 upPosition;');
+        checkDecl('colortex0', 'uniform sampler2D colortex0;');
+        checkDecl('depthtex0', 'uniform sampler2D depthtex0;');
+        checkDecl('texcoord', 'varying vec2 texcoord;');
+        checkDecl('glColor', 'varying vec4 glColor;');
+        checkDecl('normal', 'varying vec3 normal;');
+        checkDecl('worldPosition', 'varying vec3 worldPosition;');
+        cleanGlsl = missing + cleanGlsl;
+
+        var vs = gl.createShader(gl.VERTEX_SHADER);
+        gl.shaderSource(vs, vShaderSource);
+        gl.compileShader(vs);
+
+        var fs = gl.createShader(gl.FRAGMENT_SHADER);
+        gl.shaderSource(fs, cleanGlsl);
+        gl.compileShader(fs);
+
+        if (!gl.getShaderParameter(fs, gl.COMPILE_STATUS)) {
+          var err = gl.getShaderInfoLog(fs);
+          if (errEl) {
+            errEl.style.display = 'block';
+            errEl.style.background = '#7f1d1d';
+            errEl.style.color = '#fca5a5';
+            errEl.innerHTML = '<strong>Compile Warning:</strong> ' + err.replace(/\\n/g, '<br>');
+          }
+          gl.deleteShader(vs); gl.deleteShader(fs);
+          return false;
+        }
+
+        var prog = gl.createProgram();
+        gl.attachShader(prog, vs);
+        gl.attachShader(prog, fs);
+        gl.linkProgram(prog);
+
+        if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) {
+          var lerr = gl.getProgramInfoLog(prog);
+          if (errEl) {
+            errEl.style.display = 'block';
+            errEl.style.background = '#7f1d1d';
+            errEl.style.color = '#fca5a5';
+            errEl.innerHTML = '<strong>Link Error:</strong> ' + lerr;
+          }
+          return false;
+        }
+
+        if (activeProgram) gl.deleteProgram(activeProgram);
+        activeProgram = prog;
+        if (errEl) {
+          errEl.style.display = 'block';
+          errEl.style.background = '#064e3b';
+          errEl.style.color = '#34d399';
+          errEl.innerHTML = '✓ Iris Shader Live on WebGL GPU';
+        }
+        return true;
+      }
+
+      function perspectiveMat(fovy, aspect, near, far) {
+        var out = new Float32Array(16);
+        var f = 1.0 / Math.tan(fovy / 2);
+        var nf = 1 / (near - far);
+        out[0] = f / aspect; out[5] = f; out[10] = (far + near) * nf; out[11] = -1; out[14] = 2 * far * near * nf;
+        return out;
+      }
+
+      function lookAtMat(eye, center, up) {
+        var out = new Float32Array(16);
+        var z0 = eye[0]-center[0], z1 = eye[1]-center[1], z2 = eye[2]-center[2];
+        var len = 1 / Math.hypot(z0, z1, z2);
+        z0 *= len; z1 *= len; z2 *= len;
+        var x0 = up[1]*z2 - up[2]*z1, x1 = up[2]*z0 - up[0]*z2, x2 = up[0]*z1 - up[1]*z0;
+        len = 1 / Math.hypot(x0, x1, x2);
+        x0 *= len; x1 *= len; x2 *= len;
+        var y0 = z1*x2 - z2*x1, y1 = z2*x0 - z0*x2, y2 = z0*x1 - z1*x0;
+        out[0] = x0; out[1] = y0; out[2] = z0; out[3] = 0;
+        out[4] = x1; out[5] = y1; out[6] = z1; out[7] = 0;
+        out[8] = x2; out[9] = y2; out[10] = z2; out[11] = 0;
+        out[12] = -(x0*eye[0] + x1*eye[1] + x2*eye[2]);
+        out[13] = -(y0*eye[0] + y1*eye[1] + y2*eye[2]);
+        out[14] = -(z0*eye[0] + z1*eye[1] + z2*eye[2]);
+        out[15] = 1;
+        return out;
+      }
+
+      function render() {
+        var dw = canvas.clientWidth || 300, dh = canvas.clientHeight || 200;
+        if (canvas.width !== dw || canvas.height !== dh) {
+          canvas.width = dw; canvas.height = dh;
+          gl.viewport(0, 0, dw, dh);
+        }
+
+        camera.yaw += 0.003;
+        var elapsed = (performance.now() - startTime) / 1000;
+        var sunAngle = ((worldTime - 6000) / 24000) * Math.PI * 2;
+        var sunX = Math.cos(sunAngle) * 50.0, sunY = Math.sin(sunAngle) * 50.0;
+        var sunH = Math.sin(sunAngle);
+        var sky = sunH > 0.2 ? [0.45, 0.68, 0.95] : sunH > -0.1 ? [0.92, 0.45, 0.25] : [0.1, 0.1, 0.18];
+        gl.clearColor(sky[0], sky[1], sky[2], 1.0);
+        gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+
+        var proj = perspectiveMat(45 * Math.PI / 180, canvas.width / (canvas.height || 1), 0.1, 100.0);
+        var cx = camera.dist * Math.cos(camera.pitch) * Math.sin(camera.yaw);
+        var cy = camera.dist * Math.sin(camera.pitch);
+        var cz = camera.dist * Math.cos(camera.pitch) * Math.cos(camera.yaw);
+        var view = lookAtMat([cx, cy, cz], [0, 0, 0], [0, 1, 0]);
+
+        if (activeProgram) {
+          gl.useProgram(activeProgram);
+
+          function bindAttr(name, buf, sz) {
+            var loc = gl.getAttribLocation(activeProgram, name);
+            if (loc === -1) return;
+            gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+            gl.enableVertexAttribArray(loc);
+            gl.vertexAttribPointer(loc, sz, gl.FLOAT, false, 0, 0);
+          }
+          bindAttr('position', posBuf, 3);
+          bindAttr('uv', uvBuf, 2);
+          bindAttr('norm', normBuf, 3);
+          bindAttr('normal', normBuf, 3);
+          bindAttr('color', colBuf, 4);
+
+          function setM4(n, m) { var l = gl.getUniformLocation(activeProgram, n); if (l) gl.uniformMatrix4fv(l, false, m); }
+          function set3f(n, x, y, z) { var l = gl.getUniformLocation(activeProgram, n); if (l) gl.uniform3f(l, x, y, z); }
+          function set1f(n, v) { var l = gl.getUniformLocation(activeProgram, n); if (l) gl.uniform1f(l, v); }
+          function set1i(n, v) { var l = gl.getUniformLocation(activeProgram, n); if (l) gl.uniform1i(l, v); }
+
+          setM4('gbufferProjection', proj);
+          setM4('gbufferModelView', view);
+          set3f('cameraPosition', cx, cy, cz);
+          set3f('sunPosition', sunX, sunY, 10.0);
+          set3f('upPosition', 0.0, 1.0, 0.0);
+          set1f('frameTimeCounter', elapsed);
+          set1i('worldTime', worldTime);
+          set1f('rainStrength', 0.0);
+
+          gl.activeTexture(gl.TEXTURE0);
+          gl.bindTexture(gl.TEXTURE_2D, tex);
+          set1i('colortex0', 0);
+
+          gl.drawArrays(gl.TRIANGLES, 0, vertexCount);
+        }
+        requestAnimationFrame(render);
+      }
+      requestAnimationFrame(render);
+
+      return {
+        compileShader: compileShader,
+        setTime: function(t) { worldTime = t; }
+      };
+    }
+
+    var engine = initMinecraft3DEngine('previewCanvas', 'status-badge');
+    var editor = document.getElementById('code-editor');
+    if (engine) engine.compileShader(editor.value);
+
+    var curTime = 6000;
+    function toggleTime() {
+      curTime = (curTime + 6000) % 24000;
+      if (engine) engine.setTime(curTime);
+    }
+
+    function copyCode() {
+      navigator.clipboard.writeText(editor.value);
+      alert('GLSL code copied to clipboard!');
+    }
+
+    function formatCode() {
+      var lines = editor.value.split('\n');
+      var indent = 0;
+      var out = [];
+      for (var i = 0; i < lines.length; i++) {
+        var t = lines[i].trim();
+        if (!t) { out.push(''); continue; }
+        if (t.startsWith('#')) { out.push(t); continue; }
+        if (t.startsWith('}')) indent = Math.max(0, indent - 1);
+        out.push('    '.repeat(indent) + t);
+        var opens = (t.match(/\{/g) || []).length;
+        var closes = (t.match(/\}/g) || []).length;
+        if (!t.startsWith('}')) indent += opens - closes;
+        else indent += opens;
+      }
+      editor.value = out.join('\n');
+      if (engine) engine.compileShader(editor.value);
+    }
+
+    var debounceTimer;
+    editor.addEventListener('input', function() {
+      clearTimeout(debounceTimer);
+      debounceTimer = setTimeout(function() {
+        if (engine) engine.compileShader(editor.value);
+      }, 200);
+    });
+
+    editor.addEventListener('keydown', function(e) {
+      if (e.key === 'Tab') {
+        e.preventDefault();
+        var start = this.selectionStart, end = this.selectionEnd;
+        this.value = this.value.substring(0, start) + '    ' + this.value.substring(end);
+        this.selectionStart = this.selectionEnd = start + 4;
+        if (engine) engine.compileShader(this.value);
+      }
+    });
+  </script>
+</body>
+</html>

@@ -1,0 +1,6 @@
+{
+  "name": "Minecraft Iris Shader Studio",
+  "description": "Visual node-based shader maker and GLSL code editor for Minecraft 1.21+ Iris shaders with real-time preview, live compiler diagnostics, and zip shaderpack export.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
